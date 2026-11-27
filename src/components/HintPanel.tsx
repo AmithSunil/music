@@ -10,6 +10,7 @@ interface HintPanelProps {
   hintsUsed: number;
   onUnlockHint: () => void;
   isSubmitted: boolean;
+  isChordsSolved?: boolean;
   deducedCandidates: {
     key: KeySignatureInfo;
     matchScore: number;
@@ -26,6 +27,7 @@ export const HintPanel: React.FC<HintPanelProps> = ({
   hintsUsed,
   onUnlockHint,
   isSubmitted,
+  isChordsSolved = false,
   deducedCandidates,
   taggedNotesCount,
   onSelectDeducedKey,
@@ -164,7 +166,7 @@ export const HintPanel: React.FC<HintPanelProps> = ({
           )}
         </div>
 
-        {/* HINT 2: Song Chord Progression */}
+        {/* HINT 2: Exact Key Accidentals, Full Scale & Blind Chord Loop Audition */}
         <div
           className={`p-3 rounded-xl border transition ${
             hintsUsed >= 2 || isSubmitted
@@ -179,14 +181,33 @@ export const HintPanel: React.FC<HintPanelProps> = ({
               ) : (
                 <Lock className="w-3.5 h-3.5" />
               )}
-              Hint 2: Song Chord Progression (Click to Audition)
+              Hint 2: Exact Accidentals, Full Scale & Mystery Chord Audition
             </span>
+            {(hintsUsed >= 2 || isSubmitted) && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                {targetKey.accidentalCount === 0
+                  ? 'All White Keys (0 ♯/♭)'
+                  : `${targetKey.accidentals.join(', ')}`}
+              </span>
+            )}
           </div>
           {hintsUsed >= 2 || isSubmitted ? (
             <div>
               <p className="text-xs text-slate-300 mb-2">
-                These 4 chords form the song’s harmonic loop. Click each chord to hear it and deduce
-                which one is the <strong className="text-white">Tonic (Home)</strong> chord:
+                {targetKey.accidentalCount === 0 ? (
+                  <>
+                    This key uses <strong className="text-indigo-300">only the 7 white keys</strong>{' '}
+                    (no sharps or flats).
+                  </>
+                ) : (
+                  <>
+                    The exact accidentals in this key signature are{' '}
+                    <strong className="text-indigo-300">{targetKey.accidentals.join(', ')}</strong>.
+                  </>
+                )}{' '}
+                All <strong className="text-cyan-300">7 scale notes</strong> are now lit on the
+                piano! Click the 4 mystery chords below to hear the harmonic loop in isolation
+                (chord names stay hidden for Stage 2):
               </p>
               <div className="grid grid-cols-4 gap-2">
                 {song.chords.map((chord, idx) => (
@@ -196,12 +217,14 @@ export const HintPanel: React.FC<HintPanelProps> = ({
                     onClick={() => soundEngine.playChord(chord.notes, 1.3)}
                     className="flex flex-col items-center justify-center p-2 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-white transition cursor-pointer group"
                   >
-                    <span className="text-sm font-extrabold flex items-center gap-1">
-                      {chord.symbol}
+                    <span className="text-xs sm:text-sm font-extrabold flex items-center gap-1">
+                      {isChordsSolved ? chord.symbol : `Chord ${idx + 1}`}
                       <Volume2 className="w-3 h-3 text-indigo-400 opacity-75 group-hover:opacity-100" />
                     </span>
                     <span className="text-[10px] text-slate-400 mt-0.5">
-                      {chord.notes.map((n) => n.replace(/\d/, '')).join('–')}
+                      {isChordsSolved
+                        ? chord.notes.map((n) => n.replace(/\d/, '')).join('–')
+                        : 'Click to hear'}
                     </span>
                   </button>
                 ))}
@@ -209,8 +232,9 @@ export const HintPanel: React.FC<HintPanelProps> = ({
             </div>
           ) : (
             <p className="text-xs">
-              Reveals the exact chords played in the excerpt so you can analyze the diatonic harmony
-              and play each chord on demand.
+              Reveals the exact sharp/flat notes in the key signature, highlights all 7 scale notes
+              on the piano, and lets you audition the 4 isolated chords by ear without spoiling
+              their names for Stage 2.
             </p>
           )}
         </div>

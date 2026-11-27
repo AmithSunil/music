@@ -74,7 +74,7 @@ export const ChordProgressionTrainer: React.FC<ChordProgressionTrainerProps> = (
     if (!targetChord) return;
     setActiveSlot(slotIdx);
     setPlayingSlotIdx(slotIdx);
-    soundEngine.playChord(targetChord.notes, 2.6);
+    soundEngine.playChord(targetChord.notes, 1.15);
 
     if (isFullySolved) {
       onHighlightPianoNotes(
@@ -126,7 +126,7 @@ export const ChordProgressionTrainer: React.FC<ChordProgressionTrainerProps> = (
   };
 
   const auditionPaletteChord = (option: DiatonicChordOption) => {
-    soundEngine.playChord(option.notes, 2.6);
+    soundEngine.playChord(option.notes, 1.15);
     onHighlightPianoNotes(
       option.notes,
       `${option.symbol} (${option.roman} — ${option.functionLabel})`

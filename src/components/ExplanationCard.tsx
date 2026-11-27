@@ -19,6 +19,7 @@ interface ExplanationCardProps {
   selectedKeyId: string;
   targetKey: KeySignatureInfo;
   xpEarned: number;
+  isChordsSolved?: boolean;
   onContinueToChords: () => void;
   onNextSong: () => void;
 }
@@ -28,6 +29,7 @@ export const ExplanationCard: React.FC<ExplanationCardProps> = ({
   selectedKeyId,
   targetKey,
   xpEarned,
+  isChordsSolved = false,
   onContinueToChords,
   onNextSong,
 }) => {
@@ -191,7 +193,9 @@ export const ExplanationCard: React.FC<ExplanationCardProps> = ({
 
           <div className="mt-3 pt-3 border-t border-slate-800/80 text-xs text-slate-300">
             <strong className="text-indigo-300">Harmonic Clue:</strong>{' '}
-            {song.theoryExplanation.cadenceInsight}
+            {isChordsSolved
+              ? song.theoryExplanation.cadenceInsight
+              : 'Solve Stage 2 to reveal the full Roman numeral cadence breakdown for this song!'}
           </div>
         </div>
 

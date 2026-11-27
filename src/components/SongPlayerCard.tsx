@@ -142,7 +142,7 @@ export const SongPlayerCard: React.FC<SongPlayerCardProps> = ({
     return `0:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const showChordNames = isSubmitted || hintsUsed >= 2;
+  const showChordNames = isSubmitted;
 
   return (
     <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">

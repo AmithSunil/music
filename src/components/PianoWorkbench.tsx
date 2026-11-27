@@ -72,16 +72,9 @@ export const PianoWorkbench: React.FC<PianoWorkbenchProps> = ({
   const [toolMode, setToolMode] = useState<TagToolMode>('play');
   const [scaleHighlightNote, setScaleHighlightNote] = useState<string | null>(null);
 
-  const triggerNote = (keyDef: PianoKeyDef, applyTagTool = true) => {
-    soundEngine.playNote(keyDef.noteWithOctave, 2.6);
+  const startHoldingNote = (keyDef: PianoKeyDef, applyTagTool = true) => {
+    soundEngine.startNote(keyDef.noteWithOctave, 0.72);
     setActiveNotes((prev) => ({ ...prev, [keyDef.noteWithOctave]: true }));
-    window.setTimeout(() => {
-      setActiveNotes((prev) => {
-        const copy = { ...prev };
-        delete copy[keyDef.noteWithOctave];
-        return copy;
-      });
-    }, 380);
 
     if (applyTagTool && toolMode !== 'play') {
       const current = noteTags[keyDef.pitch] || 'unmarked';
@@ -91,16 +84,26 @@ export const PianoWorkbench: React.FC<PianoWorkbenchProps> = ({
     }
   };
 
+  const stopHoldingNote = (keyDef: PianoKeyDef) => {
+    soundEngine.stopNote(keyDef.noteWithOctave);
+    setActiveNotes((prev) => {
+      if (!prev[keyDef.noteWithOctave]) return prev;
+      const copy = { ...prev };
+      delete copy[keyDef.noteWithOctave];
+      return copy;
+    });
+  };
+
   const handleRightClick = (e: React.MouseEvent, keyDef: PianoKeyDef) => {
     e.preventDefault();
     const order: NoteTagStatus[] = ['unmarked', 'fits', 'home', 'clashes'];
     const current = noteTags[keyDef.pitch] || 'unmarked';
     const next = order[(order.indexOf(current) + 1) % order.length];
     onToggleNoteTag(keyDef.pitch, next);
-    soundEngine.playNote(keyDef.noteWithOctave, 1.8, 0.58);
+    soundEngine.playNote(keyDef.noteWithOctave, 0.35, 0.58);
   };
 
-  // Computer keyboard bindings
+  // Computer keyboard bindings (hold key down to sustain, release key to stop)
   useEffect(() => {
     const shortcutMap = new Map<string, PianoKeyDef>();
     PIANO_KEYS.forEach((k) => shortcutMap.set(k.shortcut.toLowerCase(), k));
@@ -118,12 +121,31 @@ export const PianoWorkbench: React.FC<PianoWorkbenchProps> = ({
       const match = shortcutMap.get(e.key.toLowerCase());
       if (match) {
         e.preventDefault();
-        triggerNote(match, false);
+        startHoldingNote(match, false);
       }
     };
 
+    const onKeyUp = (e: KeyboardEvent) => {
+      const match = shortcutMap.get(e.key.toLowerCase());
+      if (match) {
+        e.preventDefault();
+        stopHoldingNote(match);
+      }
+    };
+
+    const onWindowBlur = () => {
+      soundEngine.stopAllNotes();
+      setActiveNotes({});
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onWindowBlur);
+    };
   }, [toolMode, noteTags]);
 
   const whiteKeys = PIANO_KEYS.filter((k) => !k.isBlack);
@@ -309,7 +331,18 @@ export const PianoWorkbench: React.FC<PianoWorkbenchProps> = ({
                 <button
                   key={k.noteWithOctave}
                   type="button"
-                  onMouseDown={() => triggerNote(k)}
+                  onMouseDown={() => startHoldingNote(k)}
+                  onMouseUp={() => stopHoldingNote(k)}
+                  onMouseLeave={() => stopHoldingNote(k)}
+                  onMouseEnter={(e) => {
+                    if (e.buttons === 1) startHoldingNote(k, false);
+                  }}
+                  onTouchStart={(e) => {
+                    e.preventDefault();
+                    startHoldingNote(k);
+                  }}
+                  onTouchEnd={() => stopHoldingNote(k)}
+                  onTouchCancel={() => stopHoldingNote(k)}
                   onContextMenu={(e) => handleRightClick(e, k)}
                   className={`relative flex flex-col items-center justify-end pb-2.5 rounded-b-lg border border-slate-300 transition-all duration-75 cursor-pointer shadow-md ${bgClass}`}
                 >
@@ -421,8 +454,26 @@ export const PianoWorkbench: React.FC<PianoWorkbenchProps> = ({
                 type="button"
                 onMouseDown={(e) => {
                   e.stopPropagation();
-                  triggerNote(k);
+                  startHoldingNote(k);
                 }}
+                onMouseUp={(e) => {
+                  e.stopPropagation();
+                  stopHoldingNote(k);
+                }}
+                onMouseLeave={() => stopHoldingNote(k)}
+                onMouseEnter={(e) => {
+                  if (e.buttons === 1) startHoldingNote(k, false);
+                }}
+                onTouchStart={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  startHoldingNote(k);
+                }}
+                onTouchEnd={(e) => {
+                  e.stopPropagation();
+                  stopHoldingNote(k);
+                }}
+                onTouchCancel={() => stopHoldingNote(k)}
                 onContextMenu={(e) => {
                   e.stopPropagation();
                   handleRightClick(e, k);

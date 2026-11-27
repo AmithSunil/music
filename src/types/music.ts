@@ -93,4 +93,5 @@ export interface UserProgress {
   completedSongIds: string[];
   chordCompletedSongIds: string[];
   keyMastery: Record<string, KeyMasteryRecord>;
+  circleStepsCompleted?: number[];
 }

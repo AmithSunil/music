@@ -10,6 +10,8 @@ import {
   HelpCircle,
   CheckCircle2,
   Music2,
+  Shuffle,
+  Search,
 } from 'lucide-react';
 import {
   CHROMATIC_PITCHES,
@@ -17,9 +19,9 @@ import {
   getKeyById,
   getRelativeKey,
 } from './data/musicTheory';
-import { SONG_CHALLENGES } from './data/songs';
+import { interleaveSongsByKeyDiversity, SONG_CHALLENGES } from './data/songs';
 import { soundEngine } from './services/audioEngine';
-import { NoteTagStatus, PitchClass, UserProgress } from './types/music';
+import { KeySignatureInfo, NoteTagStatus, PitchClass, UserProgress } from './types/music';
 import { SongPlayerCard } from './components/SongPlayerCard';
 import { PianoWorkbench } from './components/PianoWorkbench';
 import { HintPanel } from './components/HintPanel';
@@ -27,6 +29,7 @@ import { KeySelector } from './components/KeySelector';
 import { ExplanationCard } from './components/ExplanationCard';
 import { ChordProgressionTrainer } from './components/ChordProgressionTrainer';
 import { AnySongExplorer } from './components/AnySongExplorer';
+import { CircleOfFifthsTrainer } from './components/CircleOfFifthsTrainer';
 
 const STORAGE_KEY = 'keysense_mvp_progress_v1';
 
@@ -37,6 +40,7 @@ const INITIAL_PROGRESS: UserProgress = {
   completedSongIds: [],
   chordCompletedSongIds: [],
   keyMastery: {},
+  circleStepsCompleted: [],
 };
 
 const EMPTY_TAGS: Record<PitchClass, NoteTagStatus> = {
@@ -55,9 +59,13 @@ const EMPTY_TAGS: Record<PitchClass, NoteTagStatus> = {
 };
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'trainer' | 'explorer'>('trainer');
+  const [activeTab, setActiveTab] = useState<'trainer' | 'circle' | 'explorer'>('trainer');
+  const [circleRevealedKey, setCircleRevealedKey] = useState<KeySignatureInfo | null>(() =>
+    getKeyById('C-major')
+  );
   const [challengeStage, setChallengeStage] = useState<'key' | 'chords'>('key');
   const [difficultyFilter, setDifficultyFilter] = useState<0 | 1 | 2 | 3>(0); // 0 = All
+  const [songSearchTerm, setSongSearchTerm] = useState<string>('');
   const [currentSongId, setCurrentSongId] = useState<string>(SONG_CHALLENGES[0].id);
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
@@ -78,6 +86,7 @@ export function App() {
         ...INITIAL_PROGRESS,
         ...parsed,
         chordCompletedSongIds: parsed.chordCompletedSongIds || [],
+        circleStepsCompleted: parsed.circleStepsCompleted || [],
       };
     } catch {
       return INITIAL_PROGRESS;
@@ -93,9 +102,27 @@ export function App() {
   }, [progress]);
 
   const filteredSongs = useMemo(() => {
-    if (difficultyFilter === 0) return SONG_CHALLENGES;
-    return SONG_CHALLENGES.filter((s) => s.difficulty === difficultyFilter);
-  }, [difficultyFilter]);
+    const byLevel =
+      difficultyFilter === 0
+        ? SONG_CHALLENGES
+        : interleaveSongsByKeyDiversity(
+            SONG_CHALLENGES.filter((s) => s.difficulty === difficultyFilter)
+          );
+    if (!songSearchTerm.trim()) return byLevel;
+    const q = songSearchTerm.trim().toLowerCase();
+    const matches = byLevel.filter(
+      (s) => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q)
+    );
+    return matches.length > 0 ? matches : byLevel;
+  }, [difficultyFilter, songSearchTerm]);
+
+  const handleRandomSong = () => {
+    const pool = filteredSongs.length > 1
+      ? filteredSongs.filter((s) => s.id !== currentSong.id)
+      : SONG_CHALLENGES;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (pick) loadSongChallenge(pick.id);
+  };
 
   const currentSong = useMemo(() => {
     return (
@@ -166,9 +193,13 @@ export function App() {
   );
 
   // If Hint 1 is active, highlight 3 non-tonic scale pitches on the piano
+  // If Hint 2 is active, highlight all 7 scale pitches on the piano (without revealing which one is tonic)
   const hintScalePitches = useMemo<PitchClass[]>(() => {
     if (hintsUsed < 1) return [];
-    return [targetKey.scaleNotes[2], targetKey.scaleNotes[4], targetKey.scaleNotes[6]];
+    if (hintsUsed === 1) {
+      return [targetKey.scaleNotes[2], targetKey.scaleNotes[4], targetKey.scaleNotes[6]];
+    }
+    return targetKey.scaleNotes;
   }, [hintsUsed, targetKey]);
 
   // If Hint 3 is active, narrow Circle of Fifths down to targetKey + its relative key
@@ -229,6 +260,18 @@ export function App() {
     });
   };
 
+  const handleCompleteCircleStep = (stepNumber: number, xpReward: number) => {
+    setProgress((prev) => {
+      const currentSteps = prev.circleStepsCompleted || [];
+      if (currentSteps.includes(stepNumber)) return prev;
+      return {
+        ...prev,
+        xp: prev.xp + xpReward,
+        circleStepsCompleted: [...currentSteps, stepNumber],
+      };
+    });
+  };
+
   const handleNextSong = () => {
     const idx = filteredSongs.findIndex((s) => s.id === currentSong.id);
     const nextSong = filteredSongs[(idx + 1) % filteredSongs.length];
@@ -271,7 +314,7 @@ export function App() {
           </div>
 
           {/* Center Mode Switcher */}
-          <div className="inline-flex rounded-xl bg-slate-900 p-1 border border-slate-800">
+          <div className="inline-flex flex-wrap rounded-xl bg-slate-900 p-1 border border-slate-800">
             <button
               type="button"
               onClick={() => setActiveTab('trainer')}
@@ -283,6 +326,30 @@ export function App() {
             >
               <Music className="w-3.5 h-3.5" />
               Guided Song Challenges ({SONG_CHALLENGES.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.stopChordLoop();
+                setActiveTab('circle');
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                activeTab === 'circle'
+                  ? 'bg-indigo-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Compass className="w-3.5 h-3.5" />
+              Learn Circle of 5ths
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                  activeTab === 'circle'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-indigo-500/20 text-indigo-300'
+                }`}
+              >
+                {(progress.circleStepsCompleted || []).length}/6
+              </span>
             </button>
             <button
               type="button"
@@ -429,12 +496,23 @@ export function App() {
                   ))}
                 </div>
 
-                {/* Song Picker Dropdown + Skip Button */}
-                <div className="flex items-center gap-2">
+                {/* Song Search, Picker Dropdown, Random & Next Buttons */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={songSearchTerm}
+                      onChange={(e) => setSongSearchTerm(e.target.value)}
+                      placeholder="Filter songs..."
+                      className="w-32 sm:w-40 pl-8 pr-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
                   <select
                     value={currentSong.id}
                     onChange={(e) => loadSongChallenge(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500 cursor-pointer max-w-[240px] sm:max-w-xs"
                     aria-label="Choose song challenge"
                   >
                     {filteredSongs.map((s, idx) => {
@@ -453,10 +531,20 @@ export function App() {
 
                   <button
                     type="button"
+                    onClick={handleRandomSong}
+                    title="Pick a random song challenge"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-xs font-bold text-indigo-300 transition cursor-pointer"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    Random
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleNextSong}
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition cursor-pointer"
                   >
-                    Next Song
+                    Next
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -554,7 +642,7 @@ export function App() {
             {/* 1. Song Player Card (Always visible in both Stage 1 & Stage 2) */}
             <SongPlayerCard
               song={currentSong}
-              isSubmitted={isSubmitted && challengeStage === 'chords' && isChordsSolvedForCurrent}
+              isSubmitted={isChordsSolvedForCurrent}
               hintsUsed={hintsUsed}
             />
 
@@ -569,6 +657,7 @@ export function App() {
                     selectedKeyId={selectedKeyId}
                     targetKey={targetKey}
                     xpEarned={lastXpEarned}
+                    isChordsSolved={isChordsSolvedForCurrent}
                     onContinueToChords={() => setChallengeStage('chords')}
                     onNextSong={handleNextSong}
                   />
@@ -592,6 +681,7 @@ export function App() {
                       hintsUsed={hintsUsed}
                       onUnlockHint={() => setHintsUsed((h) => Math.min(3, h + 1))}
                       isSubmitted={isSubmitted}
+                      isChordsSolved={isChordsSolvedForCurrent}
                       deducedCandidates={deducedCandidates}
                       taggedNotesCount={taggedNotesCount}
                       onSelectDeducedKey={(kId) => setSelectedKeyId(kId)}
@@ -646,8 +736,31 @@ export function App() {
               </>
             )}
           </>
+        ) : activeTab === 'circle' ? (
+          /* TAB 2: Step-by-Step Circle of Fifths Memory Academy + Piano Workbench */
+          <div className="space-y-5">
+            <CircleOfFifthsTrainer
+              completedSteps={progress.circleStepsCompleted || []}
+              onCompleteStep={handleCompleteCircleStep}
+              onHighlightPianoNotes={(notes, label) => {
+                setHighlightedChordNotes(notes);
+                setHighlightedChordLabel(label);
+              }}
+              onSelectRevealedKey={(key) => setCircleRevealedKey(key)}
+            />
+            <PianoWorkbench
+              noteTags={noteTags}
+              onToggleNoteTag={handleToggleNoteTag}
+              onClearTags={() => setNoteTags(EMPTY_TAGS)}
+              revealedKey={circleRevealedKey}
+              highlightedChordNotes={highlightedChordNotes}
+              highlightedChordLabel={highlightedChordLabel}
+              pianoVolume={pianoVolume}
+              onPianoVolumeChange={handlePianoVolumeChange}
+            />
+          </div>
         ) : (
-          /* TAB 2: Explore Any Song on iTunes + Piano Workbench */
+          /* TAB 3: Explore Any Song on iTunes + Piano Workbench */
           <div className="space-y-5">
             <AnySongExplorer
               deducedCandidates={deducedCandidates}

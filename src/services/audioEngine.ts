@@ -15,7 +15,6 @@ const NOTE_OFFSETS: Record<PitchClass, number> = {
   B: 11,
 };
 
-// Also handle enharmonic strings like Db, D#, Gb, G#, A#
 const ENHARMONIC_NORMALIZE: Record<string, PitchClass> = {
   C: 'C',
   'C#': 'C#',
@@ -53,6 +52,12 @@ export function noteToFrequency(noteStr: string): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
+interface ActiveVoice {
+  oscillators: OscillatorNode[];
+  noteGain: GainNode;
+  safetyTimer: number;
+}
+
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -60,6 +65,7 @@ class SoundEngine {
   private volume: number = 0.85;
   private loopTimer: number | null = null;
   private scaleTimers: number[] = [];
+  private activeVoices: Map<string, ActiveVoice> = new Map();
 
   private initContext() {
     if (!this.ctx) {
@@ -68,13 +74,12 @@ class SoundEngine {
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
 
-      // Studio compressor to give piano notes strong sustain body and presence over song previews
       this.compressor = this.ctx.createDynamicsCompressor();
       this.compressor.threshold.setValueAtTime(-20, this.ctx.currentTime);
       this.compressor.knee.setValueAtTime(12, this.ctx.currentTime);
       this.compressor.ratio.setValueAtTime(3.5, this.ctx.currentTime);
       this.compressor.attack.setValueAtTime(0.004, this.ctx.currentTime);
-      this.compressor.release.setValueAtTime(0.28, this.ctx.currentTime);
+      this.compressor.release.setValueAtTime(0.25, this.ctx.currentTime);
 
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = this.volume * 1.35;
@@ -99,11 +104,17 @@ class SoundEngine {
   }
 
   /**
-   * Plays a rich, full-bodied sustaining stage grand piano note with multi-string unison harmonics
+   * Starts and sustains a piano note while the key is held down.
+   * Call stopNote(noteWithOctave) when the user releases the key.
    */
-  public playNote(noteWithOctave: string, duration = 2.6, velocity = 0.72) {
+  public startNote(noteWithOctave: string, velocity = 0.72) {
     this.initContext();
     if (!this.ctx || !this.compressor) return;
+
+    // If this note is already ringing, release the old voice cleanly first
+    if (this.activeVoices.has(noteWithOctave)) {
+      this.stopNote(noteWithOctave, 0.04);
+    }
 
     const now = this.ctx.currentTime;
     const freq = noteToFrequency(noteWithOctave);
@@ -120,44 +131,38 @@ class SoundEngine {
     osc2.detune.setValueAtTime(3.5, now);
 
     const sawGain = this.ctx.createGain();
-    sawGain.gain.setValueAtTime(0.38, now);
-    sawGain.gain.exponentialRampToValueAtTime(0.18, now + duration * 0.8);
+    sawGain.gain.setValueAtTime(0.36, now);
+    sawGain.gain.setTargetAtTime(0.14, now + 0.1, 1.8);
 
-    // 3. Unison chorus string oscillator (slightly detuned triangle for long singing sustain)
+    // 3. Unison chorus string oscillator (slightly detuned triangle)
     const osc3 = this.ctx.createOscillator();
     osc3.type = 'triangle';
     osc3.frequency.setValueAtTime(freq, now);
     osc3.detune.setValueAtTime(-3.5, now);
 
-    // 4. Harmonic octave & hammer overtone (2x frequency sine that sustains gently)
+    // 4. Harmonic octave overtone (2x frequency sine)
     const osc4 = this.ctx.createOscillator();
     osc4.type = 'sine';
     osc4.frequency.setValueAtTime(freq * 2, now);
 
     const overtoneGain = this.ctx.createGain();
-    overtoneGain.gain.setValueAtTime(0.32, now);
-    overtoneGain.gain.exponentialRampToValueAtTime(0.11, now + duration * 0.75);
+    overtoneGain.gain.setValueAtTime(0.3, now);
+    overtoneGain.gain.setTargetAtTime(0.08, now + 0.08, 1.4);
 
-    // Warm resonant low-pass filter that stays open during sustain
+    // Warm resonant low-pass filter that stays open while the key is held
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.Q.setValueAtTime(1.4, now);
+    filter.Q.setValueAtTime(1.3, now);
     filter.frequency.setValueAtTime(Math.min(8200, freq * 11), now);
-    filter.frequency.exponentialRampToValueAtTime(
-      Math.max(1500, freq * 4.8),
-      now + duration * 0.85
-    );
+    filter.frequency.setTargetAtTime(Math.max(1500, freq * 4.5), now + 0.15, 2.2);
 
-    // Long, pedal-sustained piano amplitude envelope
+    // Hold-to-sustain envelope: crisp attack, then rings for as long as the key is held
     const noteGain = this.ctx.createGain();
     noteGain.gain.setValueAtTime(0.0001, now);
-    // Crisp hammer strike
-    noteGain.gain.linearRampToValueAtTime(velocity, now + 0.009);
-    // High sustain plateau so the note rings out clearly for seconds
-    noteGain.gain.exponentialRampToValueAtTime(velocity * 0.82, now + 0.25);
-    noteGain.gain.exponentialRampToValueAtTime(velocity * 0.56, now + duration * 0.7);
-    // Smooth damper release tail
-    noteGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.55);
+    noteGain.gain.linearRampToValueAtTime(velocity, now + 0.008);
+    // Settle onto a strong held-string sustain plateau; slowly fades over ~10s like a real held piano string
+    noteGain.gain.setTargetAtTime(velocity * 0.78, now + 0.01, 0.18);
+    noteGain.gain.setTargetAtTime(0.001, now + 0.35, 3.2);
 
     osc1.connect(filter);
     osc3.connect(filter);
@@ -169,22 +174,71 @@ class SoundEngine {
     filter.connect(noteGain);
     noteGain.connect(this.compressor);
 
-    osc1.start(now);
-    osc2.start(now);
-    osc3.start(now);
-    osc4.start(now);
+    const oscillators = [osc1, osc2, osc3, osc4];
+    oscillators.forEach((osc) => osc.start(now));
 
-    const stopTime = now + duration + 0.6;
-    osc1.stop(stopTime);
-    osc2.stop(stopTime);
-    osc3.stop(stopTime);
-    osc4.stop(stopTime);
+    // Safety auto-cleanup after 12 seconds in case a keyup event is missed
+    const safetyTimer = window.setTimeout(() => {
+      this.stopNote(noteWithOctave);
+    }, 12000);
+
+    this.activeVoices.set(noteWithOctave, {
+      oscillators,
+      noteGain,
+      safetyTimer,
+    });
   }
 
   /**
-   * Plays a full chord voicing with warm pedal sustain and subtle human strum (18ms arpeggiation)
+   * Drops the piano damper when the key is released, silencing the note with a natural ~160ms damper tail.
    */
-  public playChord(notes: string[], duration = 2.8) {
+  public stopNote(noteWithOctave: string, releaseSec = 0.16) {
+    const voice = this.activeVoices.get(noteWithOctave);
+    if (!voice || !this.ctx) return;
+
+    this.activeVoices.delete(noteWithOctave);
+    clearTimeout(voice.safetyTimer);
+
+    const now = this.ctx.currentTime;
+    const gainParam = voice.noteGain.gain;
+
+    gainParam.cancelScheduledValues(now);
+    // Anchor current gain value and ramp smoothly to silence (damper drop)
+    const currentVal = Math.max(0.0001, gainParam.value);
+    gainParam.setValueAtTime(currentVal, now);
+    gainParam.exponentialRampToValueAtTime(0.0001, now + releaseSec);
+
+    const stopAt = now + releaseSec + 0.03;
+    voice.oscillators.forEach((osc) => {
+      try {
+        osc.stop(stopAt);
+      } catch {
+        // ignore if already stopped
+      }
+    });
+  }
+
+  /**
+   * Releases all currently held piano notes immediately
+   */
+  public stopAllNotes() {
+    Array.from(this.activeVoices.keys()).forEach((note) => this.stopNote(note));
+  }
+
+  /**
+   * Plays a one-shot note for a fixed duration (used by scale player and non-held triggers)
+   */
+  public playNote(noteWithOctave: string, duration = 0.55, velocity = 0.7) {
+    this.startNote(noteWithOctave, velocity);
+    window.setTimeout(() => {
+      this.stopNote(noteWithOctave, 0.16);
+    }, Math.max(120, duration * 1000));
+  }
+
+  /**
+   * Plays a full chord voicing for a balanced duration
+   */
+  public playChord(notes: string[], duration = 1.1) {
     this.initContext();
     notes.forEach((note, idx) => {
       window.setTimeout(() => {
@@ -219,18 +273,17 @@ class SoundEngine {
       prevIndex = idx;
     }
 
-    // Add top tonic resolution note
     const tonicIdx = NOTE_OFFSETS[scaleNotes[0]];
     if (tonicIdx < prevIndex) {
       currentOctave = Math.min(4, currentOctave + 1);
     }
     fullSequence.push(`${scaleNotes[0]}${currentOctave}`);
 
-    const stepMs = 280;
+    const stepMs = 260;
     fullSequence.forEach((noteStr, idx) => {
       const isLast = idx === fullSequence.length - 1;
       const t = window.setTimeout(() => {
-        this.playNote(noteStr, isLast ? 2.6 : 1.15, isLast ? 0.78 : 0.62);
+        this.playNote(noteStr, isLast ? 0.95 : 0.24, isLast ? 0.75 : 0.62);
         onNoteActive?.(noteStr);
       }, idx * stepMs);
       this.scaleTimers.push(t);
@@ -238,7 +291,7 @@ class SoundEngine {
 
     const endTimer = window.setTimeout(() => {
       onNoteActive?.(null);
-    }, fullSequence.length * stepMs + 600);
+    }, fullSequence.length * stepMs + 450);
     this.scaleTimers.push(endTimer);
   }
 
@@ -258,13 +311,13 @@ class SoundEngine {
     this.stopChordLoop();
     if (!chords.length) return;
 
-    const chordDurationMs = Math.max(1400, Math.min(2400, Math.round((60 / bpm) * 2 * 1000)));
+    const chordDurationMs = Math.max(1200, Math.min(2200, Math.round((60 / bpm) * 2 * 1000)));
     let currentIdx = 0;
 
     const triggerStep = () => {
       const chord = chords[currentIdx];
       onChordChange?.(currentIdx);
-      this.playChord(chord.notes, (chordDurationMs / 1000) * 1.35);
+      this.playChord(chord.notes, (chordDurationMs / 1000) * 0.88);
       currentIdx = (currentIdx + 1) % chords.length;
     };
 
